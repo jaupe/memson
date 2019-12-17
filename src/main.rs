@@ -41,6 +41,8 @@
 
 #![warn(rust_2018_idioms)]
 
+use std::io::{self, Lines, Write, BufReader};
+
 use tokio::net::TcpListener;
 use tokio_util::codec::{Framed, LinesCodec};
 
@@ -48,22 +50,19 @@ use futures::{SinkExt, StreamExt};
 use std::collections::BTreeMap;
 use std::env;
 use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonVal;
 use json::*;
 use either::Either;
+use std::path::Path;
+use std::fs::{File,OpenOptions};
+use replay::ReplayLog;
+use db::*;
 
+mod db;
 mod json;
-
-type Cache = BTreeMap<String, JsonVal>;
-/// The in-memory database shared amongst all clients.
-///
-/// This database will be shared via `Arc`, so to mutate the internal map we're
-/// going to use a `Mutex` for interior mutability.
-struct Database {
-    pub map: Mutex<Cache>,
-}
+mod replay;
 
 /// Possible requests our clients can send us
 #[derive(Debug,Deserialize,Serialize)]
@@ -82,7 +81,7 @@ enum Request {
     First(Box<Request>),
     #[serde(rename = "last")]
     Last(Box<Request>),
-    #[serde(rename = "add")]
+    #[serde(rename = "+")]
     Add(Box<Request>, Option<Box<Request>>),
 }
 
@@ -147,11 +146,6 @@ enum Response {
         key: String,
         value: JsonVal,
     },
-    Set {
-        key: String,
-        value: JsonVal,
-        previous: Option<JsonVal>,
-    },
     Error {
         msg: String,
     },
@@ -161,7 +155,7 @@ enum Response {
 async fn main() -> Result<(), Box<dyn Error>> {
     // Parse the address we're going to run this server on
     // and set up our TCP listener to accept connections.
-    let addr = env::args().nth(1).unwrap_or("127.0.0.1:8080".to_string());
+    let addr = env::args().nth(1).unwrap_or("0.0.0.0:8080".to_string());
 
     let mut listener = TcpListener::bind(&addr).await?;
     println!("Listening on: {}", addr);
@@ -171,19 +165,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // structure. Note the usage of `Arc` here which will be used to ensure that
     // each independently spawned client will have a reference to the in-memory
     // database.
-    let mut cache = BTreeMap::new();
-    cache.insert("foo".to_string(), JsonVal::from("bar".to_string()));
-    let db = Arc::new(Database {
-        map: Mutex::new(cache),
-    });
-
+    let log_path = "memson.log";
+    println!("replaying write log: {:?}", log_path);
+    let db: Database = Database::open(log_path).unwrap();
+    let db: Arc<Mutex<Database>> = Arc::new(Mutex::new(db));
+    
     loop {
         match listener.accept().await {
             Ok((socket, _)) => {
                 // After getting a new connection first we see a clone of the database
                 // being created, which is creating a new reference for this connected
                 // client to use.
-                let db = db.clone();
+                let dbase = db.clone();
 
                 // Like with other small servers, we'll `spawn` this client to ensure it
                 // runs concurrently with all other clients. The `move` keyword is used
@@ -200,7 +193,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     while let Some(result) = lines.next().await {
                         match result {
                             Ok(line) => {
-                                let response = handle_request(&line, &db);
+                                let response = handle_request(&line, &dbase);
 
                                 let response = response.serialize();
 
@@ -222,66 +215,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn handle_request(line: &str, db: &Arc<Database>) -> Response {
+fn handle_request(line: &str, db: &Arc<Mutex<Database>>) -> Response {
     let json_val: JsonVal = match serde_json::from_str(line) {
         Ok(val) => val,
         Err(_) => return Response::Error { msg: "bad json".to_string() },
     };
     
-    let mut db = db.map.lock().unwrap();
+    let mut db = db.lock().unwrap();
     match eval_json(&json_val, &mut db) {
-        Some(Either::Left(lhs)) => Response::Value{key: line.to_string(), value: lhs},
-        Some(Either::Right(rhs)) => Response::Value{key: line.to_string(), value: rhs.clone()},
+        Some(Either::Left(lhs)) => Response::Value{ key: line.to_string(), value: lhs },
+        Some(Either::Right(rhs)) => Response::Value{ key: line.to_string(), value: rhs.clone() },
         None => Response::Value{key: line.to_string(), value: JsonVal::Null},
     }
 }
 
 impl Request {
-    fn parse2(input: &str) -> Result<Request, String> {
+    fn parse(input: &str) -> Result<Request, String> {
         serde_json::from_str(input).map_err(|_| "cannot parse".to_string())
     }
-
-    /*
-    fn parse(input: &str) -> Result<Request, String> {
-        let mut parts = input.splitn(3, " ");
-        match parts.next() {
-            Some("GET") => {
-                let key = match parts.next() {
-                    Some(key) => key,
-                    None => return Err(format!("GET must be followed by a key")),
-                };
-                if parts.next().is_some() {
-                    return Err(format!("GET's key must not be followed by anything"));
-                }
-                Ok(Request::Get(key.to_string()))
-            }
-            Some("SET") => {
-                let key = match parts.next() {
-                    Some(key) => key,
-                    None => return Err(format!("SET must be followed by a key")),
-                };
-                let value = match parts.next() {
-                    Some(value) => value,
-                    None => return Err(format!("SET needs a value")),
-                };
-                Ok(Request::Set(key.to_string(), value.clone()))
-            }
-            Some(cmd) => Err(format!("unknown command: {}", cmd)),
-            None => Err(format!("empty input")),
-        }
-    }
-    */
 }
 
 impl Response {
     fn serialize(&self) -> String {
         match *self {
             Response::Value { ref key, ref value } => format!("{} = {}", key, value),
-            Response::Set {
-                ref key,
-                ref value,
-                ref previous,
-            } => format!("set {} = `{}`, previous: {:?}", key, value, previous),
             Response::Error { ref msg } => format!("error: {}", msg),
         }
     }
