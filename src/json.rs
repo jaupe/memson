@@ -153,5 +153,5 @@ fn add_arr(arr: &[JsonVal]) -> Option<JsonVal> {
 }
 
 fn add_nums(x: &Number, y: &Number) -> JsonVal {
-    JsonVal::from(x.as_f64().unwrap() + y.as_f64().unwrap())
+    JsonVal::from(x.as_f64().unwrap() + y.as_f64().unwrap())    
 }
