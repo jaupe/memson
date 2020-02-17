@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+use crate::db::Cache;
+use crate::Res;
+use crate::json::Cmd;
 use std::fs::{File,OpenOptions};
 use std::path::Path;
 use std::io::{self, BufRead, BufReader, Write};
@@ -23,24 +25,31 @@ impl ReplayLog {
     }
 
     pub fn write(&mut self, key: &str, val: &JsonVal) -> io::Result<()> {
-        let line = key.to_string() + "=" + &val.to_string() + "\n";
+        let line = "{\"set\":[\"".to_string() + key + "\"," + &val.to_string() + "]}\n";
         self.file.write_all(line.as_bytes())?;
         Ok(())
     }
 
-    pub fn replay<'a>(&'a mut self) -> BTreeMap<String, JsonVal> {
+    pub fn remove(&mut self, key: &str) -> io::Result<()> {
+        let line = "{\"del\": \"".to_string() + key + "\"}\n";
+        self.file.write_all(line.as_bytes())
+    }
+
+    pub fn replay(&mut self) -> Res<Cache> {
         let buf = Box::new(BufReader::new(&mut self.file));
-        let mut cache = BTreeMap::new();
+        let mut cache = Cache::new();
         for line in buf.lines() {
             println!("line={:?}", line);
-            let s = line.unwrap();
+            let line = line.map_err(|err| {eprintln!("{:?}", err); "bad line"})?;
+            let val: Cmd = serde_json::from_str(&line).map_err(|err| {println!("{:?}", err); "bad json"})?;
 
-            let mut it = s.split_terminator('=');
-            let key = it.next().unwrap();
-            let val_str = it.next().unwrap();
-            let val: JsonVal = serde_json::from_str(&val_str).unwrap();
-            cache.insert(key.to_string(), val);
+            match val {
+                Cmd::Set(key, val) => {
+                    cache.insert(key, val);
+                }
+                _ => return Err("unexpected json"),
+            }            
         }
-        cache
+        Ok(cache)
     }   
 }

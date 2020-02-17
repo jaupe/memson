@@ -1,20 +1,20 @@
 use std::path::Path;
 use std::collections::BTreeMap;
 use serde_json::Value as JsonVal;
-use std::sync::Mutex;
+use crate::json::*;
 use crate::replay::*;
 use std::io::{self};
 
 pub struct Cache {
-    pub map: BTreeMap<String, JsonVal>,
+    map: BTreeMap<String, JsonVal>,
 }
 
 impl Cache {
-    fn new() -> Cache {
+    pub fn new() -> Cache {
         Cache { map: BTreeMap::new() }
     }
 
-    fn write(&mut self, key: String, val: JsonVal) -> Option<JsonVal> {
+    pub fn insert(&mut self, key: String, val: JsonVal) -> Option<JsonVal> {
         self.map.insert(key, val)
     }
 }
@@ -29,18 +29,32 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn open<P:AsRef<Path>>(path: P) -> io::Result<Database> {
-        let mut log = ReplayLog::open("replay.memson")?;
-        let cache = Cache { map: log.replay() };
+    pub fn open<P:AsRef<Path>>(path: P) -> Res<Database> {
+        let mut log = ReplayLog::open(path).map_err(|err| { eprintln!("{:?}", err); "bad io"})?;
+        let cache = log.replay()?;
         Ok(Database { cache, log })
     }
 
-    pub fn write(&mut self, key: String, val: JsonVal) -> io::Result<Option<JsonVal>> {
+    pub fn set(&mut self, key: String, val: JsonVal) -> io::Result<Option<JsonVal>> {
         self.log.write(&key, &val)?;
-        Ok(self.cache.write(key, val))
+        Ok(self.cache.insert(key, val))
     }
 
     pub fn get(&self, key: &str) -> Option<&JsonVal> {
         self.cache.map.get(key)
+    }
+
+    pub fn del(&mut self, key: &str) -> io::Result<Option<JsonVal>> {
+        self.log.remove(&key)?;
+        Ok(self.cache.map.remove(key))
+    }
+
+    pub fn eval<'a>(&'a mut self, line: &str) -> JsonRes<'a> {
+        let json_val: Cmd = parse_json_str(line)?;
+        eval_json_cmd(json_val, self)
+    }
+
+    pub fn len(&self) -> usize {
+        self.cache.map.len()
     }
 }

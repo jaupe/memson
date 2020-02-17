@@ -1,71 +1,33 @@
-//! A "tiny database" and accompanying protocol
+//! Memson is an in-memory JSON key/value cache.
 //!
-//! This example shows the usage of shared state amongst all connected clients,
-//! namely a database of key/value pairs. Each connected client can send a
-//! series of GET/SET commands to query the current value of a key or set the
-//! value of a key.
+//! JSON structures are stored by a string key.
 //!
-//! This example has a simple protocol you can use to interact with the server.
-//! To run, first run this in one terminal window:
-//!
-//!     cargo run --example tinydb
-//!
-//! and next in another windows run:
-//!
-//!     cargo run --example connect 127.0.0.1:8080
-//!
-//! In the `connect` window you can type in commands where when you hit enter
-//! you'll get a response from the server for that command. An example session
-//! is:
-//!
-//!
-//!     $ cargo run --example connect 127.0.0.1:8080
-//!     GET foo
-//!     foo = bar
-//!     GET FOOBAR
-//!     error: no key FOOBAR
-//!     SET FOOBAR my awesome string
-//!     set FOOBAR = `my awesome string`, previous: None
-//!     SET foo tokio
-//!     set foo = `tokio`, previous: Some("bar")
-//!     GET foo
-//!     foo = tokio
-//!
-//! Namely you can issue two forms of commands:
-//!
-//! * `GET $key` - this will fetch the value of `$key` from the database and
-//!   return it. The server's database is initially populated with the key `foo`
-//!   set to the value `bar`
-//! * `SET $key $value` - this will set the value of `$key` to `$value`,
-//!   returning the previous value, if any.
+
 
 #![warn(rust_2018_idioms)]
 
-use std::io::{self, Lines, Write, BufReader};
-
+use clap::{App, Arg};
 use tokio::net::TcpListener;
 use tokio_util::codec::{Framed, LinesCodec};
 
+use db::*;
+use either::Either;
 use futures::{SinkExt, StreamExt};
-use std::collections::BTreeMap;
-use std::env;
-use std::error::Error;
-use std::sync::{Arc, Mutex, RwLock};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonVal;
-use json::*;
-use either::Either;
-use std::path::Path;
-use std::fs::{File,OpenOptions};
-use replay::ReplayLog;
-use db::*;
+use std::error::Error;
+use std::sync::{Arc, Mutex};
 
 mod db;
 mod json;
+mod parse;
 mod replay;
 
+type Res<T> = Result<T, &'static str>;
+
 /// Possible requests our clients can send us
-#[derive(Debug,Deserialize,Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 enum Request {
     #[serde(rename = "get")]
     Get(String),
@@ -85,91 +47,61 @@ enum Request {
     Add(Box<Request>, Option<Box<Request>>),
 }
 
-impl Request {
-    fn to_string(&self) -> String {
-        serde_json::to_string(self).unwrap()
-    }
-
-    /*
-    fn eval(self, cache: &mut Cache) -> Response {
-        match self {
-            Request::Get(key) => {
-                match cache.get(&key) {
-                    Some(val) => Response::Value{key, value: val.clone() },
-                    None => Response::Error{msg: "not found".to_string()},
-                }
-            }
-            Request::Set(key, value) => {
-                let previous = cache.insert(key.clone(), value.clone());
-                Response::Set{key, value, previous}
-            }
-            Request::Sum(arg) => {
-                match arg.eval(cache) {
-                    Response::Error{msg} => Response::Error{msg},
-                    Response::Value{key, value } => unimplemented!(),
-                    _ => unimplemented!()
-                }
-            }
-            Request::First(arg) => {
-                match arg.eval(cache) {
-                    Response::Error{msg} => Response::Error{msg},
-                    Response::Value{key, value} => {
-                        match json_first(&value) {
-                            Some(value) => Response::Value{key, value},
-                            None => Response::Value{key, value: JsonVal::Null}
-                        }
-                    }
-                    _ => unimplemented!(),
-                }
-            }
-            Request::Last(arg) => {
-                match arg.eval(cache) {
-                    Response::Error{msg} => Response::Error{msg},
-                    Response::Value{key, value} => {
-                        match json_last(&value) {
-                            Some(value) => Response::Value{key, value},
-                            None => Response::Value{key, value: JsonVal::Null}
-                        }
-                    }
-                    _ => unimplemented!(),
-                }
-            }
-            _ => unimplemented!(),
-        }
-    }
-    */
-}
-
 /// Responses to the `Request` commands above
 enum Response {
-    Value {
-        key: String,
-        value: JsonVal,
-    },
-    Error {
-        msg: String,
-    },
+    Value { value: JsonVal },
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let matches = App::new("memson")
+        .version("1.0")
+        .about("In-memory JSON Cache")
+        .author("jaupe")
+        .arg(
+            Arg::with_name("log")
+                .short("l")
+                .long("log")
+                .value_name("FILE")
+                .help("Sets a custom config file")
+                .takes_value(false),
+        )
+        .arg(
+            Arg::with_name("host")
+                .short("h")
+                .long("host")
+                .value_name("IP")
+                .help("Sets the IP address to listen on")
+                .takes_value(false),
+        )
+        .arg(
+            Arg::with_name("port")
+                .short("p")
+                .long("port")
+                .value_name("port")
+                .help("Sets the port number to listen on")
+                .takes_value(false),
+        )
+        .get_matches();
+
+    let log = matches.value_of("log").unwrap_or("memson.log");
     // Parse the address we're going to run this server on
     // and set up our TCP listener to accept connections.
-    let addr = env::args().nth(1).unwrap_or("0.0.0.0:8080".to_string());
-
+    let host = matches.value_of("host").unwrap_or("0.0.0.0");
+    let port = matches.value_of("port").unwrap_or("8000");
+    let addr = host.to_string() + ":" + port;
+    println!("replaying write log: {:?}", log);
+    println!("listening on: {:?}", addr);
     let mut listener = TcpListener::bind(&addr).await?;
-    println!("Listening on: {}", addr);
 
     // Create the shared state of this server that will be shared amongst all
     // clients. We populate the initial database and then create the `Database`
     // structure. Note the usage of `Arc` here which will be used to ensure that
     // each independently spawned client will have a reference to the in-memory
     // database.
-    let log_path = "memson.log";
-    println!("replaying write log: {:?}", log_path);
-    let db: Database = Database::open(log_path).unwrap();
+
+    let db: Database = Database::open(&addr).unwrap();
     let db: Arc<Mutex<Database>> = Arc::new(Mutex::new(db));
-    
     loop {
         match listener.accept().await {
             Ok((socket, _)) => {
@@ -193,7 +125,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     while let Some(result) = lines.next().await {
                         match result {
                             Ok(line) => {
-                                let response = handle_request(&line, &dbase);
+                                let response = match handle_request(&line, &dbase) {
+                                    Ok(r) => r,
+                                    Err(err) => {
+                                        eprintln!("{:?}", err);
+                                        continue;
+                                    }
+                                };
 
                                 let response = response.serialize();
 
@@ -209,37 +147,204 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                     // The connection will be closed at this point as `lines.next()` has returned `None`.
                 });
-            },
+            }
             Err(e) => println!("error accepting socket; error = {:?}", e),
         }
     }
 }
 
-fn handle_request(line: &str, db: &Arc<Mutex<Database>>) -> Response {
-    let json_val: JsonVal = match serde_json::from_str(line) {
-        Ok(val) => val,
-        Err(_) => return Response::Error { msg: "bad json".to_string() },
+fn handle_request(line: &str, db_lock: &Arc<Mutex<Database>>) -> Res<Response> {
+    let mut db = db_lock.lock().unwrap();
+    let val = db.eval(line);
+    println!("{:?}", val);
+    let val = match val {
+        Ok(Either::Left(lhs)) => Response::Value {
+            value: lhs,
+        },
+        Ok(Either::Right(rhs)) => Response::Value {
+            value: rhs.clone(),
+        },
+        Err(msg) => {
+            eprintln!("error: {}", msg);
+            Response::Value {
+                value: JsonVal::Null,
+            }
+        }
     };
-    
-    let mut db = db.lock().unwrap();
-    match eval_json(&json_val, &mut db) {
-        Some(Either::Left(lhs)) => Response::Value{ key: line.to_string(), value: lhs },
-        Some(Either::Right(rhs)) => Response::Value{ key: line.to_string(), value: rhs.clone() },
-        None => Response::Value{key: line.to_string(), value: JsonVal::Null},
-    }
-}
-
-impl Request {
-    fn parse(input: &str) -> Result<Request, String> {
-        serde_json::from_str(input).map_err(|_| "cannot parse".to_string())
-    }
+    Ok(val)
 }
 
 impl Response {
     fn serialize(&self) -> String {
-        match *self {
-            Response::Value { ref key, ref value } => format!("{} = {}", key, value),
-            Response::Error { ref msg } => format!("error: {}", msg),
+        match self {
+            Response::Value { value: val, .. } => format!("{}", val),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+
+    use assert_approx_eq::assert_approx_eq;
+    
+    fn json_fn(f: &str, key: &str) -> String {
+        "{\"".to_string() + f + "\":\"" + key + "\"}"  
+    }
+
+    fn json_fn_get(f: &str, key: &str) -> String {
+        "{\"".to_string() + f + "\": {\"get\":\"" + key + "\"}]"  
+    }
+
+    fn test_db() -> Database {
+        Database::open("test.log").unwrap()
+    }
+
+    fn json_f64(v: &JsonVal) -> f64 {
+        v.as_f64().unwrap()
+    }
+
+    fn val_f64<'a>(v: Either<JsonVal, &'a JsonVal>) -> f64 {
+        match v {
+            Either::Left(ref val) => json_f64(val),
+            Either::Right(val) => json_f64(val),
+        }
+    }
+
+    #[test]
+    fn open_db() {
+        let db = test_db();
+        assert_eq!(7, db.len());
+    }
+
+    #[test]
+    fn get() {
+        let mut db = test_db();
+        let val = db.eval(&json_fn("get", "b")).unwrap();
+        assert_eq!(Either::Right(&JsonVal::Bool(true)), val);
+
+        let val = db.eval("\"b\"").unwrap();
+        assert_eq!(Either::Right(&JsonVal::Bool(true)), val);
+
+        let val = db.eval(&json_fn("get", "ia")).unwrap();
+        assert_eq!(
+            Either::Right(&JsonVal::Array(vec![
+                JsonVal::from(1),
+                JsonVal::from(2),
+                JsonVal::from(3),
+                JsonVal::from(4),
+                JsonVal::from(5)
+            ])),
+            val
+        );
+
+        let val = db.eval(&json_fn("get", "i")).unwrap();
+        assert_eq!(
+            Either::Right(&JsonVal::from(3)),
+            val
+        );        
+    }
+
+    #[test]
+    fn first() {
+        let mut db = test_db();
+        let val = db.eval(r#"{"first": "b"}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::Bool(true)), val);
+        let val = db.eval(r#"{"first": {"get": "b"}}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::Bool(true)), val);
+        let val = db.eval(&json_fn("first", "f")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.3)), val);
+        let val = db.eval(&json_fn("first", "i")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3)), val);
+        let val = db.eval(&json_fn("first", "fa")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(1.0)), val);
+        let val = db.eval(&json_fn("first", "ia")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(1)), val);        
+    }
+
+    #[test]
+    fn last() {
+        let mut db = test_db();
+        let val = db.eval(r#"{"last": "b"}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(true)), val);
+        let val = db.eval(r#"{"last": {"get": "b"}}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(true)), val);
+        let val = db.eval(&json_fn("last", "f")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.3)), val);
+        let val = db.eval(&json_fn("last", "i")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3)), val);
+        let val = db.eval(&json_fn("last", "fa")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(5.0)), val);
+        let val = db.eval(&json_fn("last", "ia")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(5)), val);        
+    }
+
+    #[test]
+    fn max() {
+        let mut db = test_db();
+        let val = db.eval(r#"{"max": "b"}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::Bool(true)), val);
+        let val = db.eval(r#"{"max": {"get": "i"}}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3)), val);
+        let val = db.eval(r#"{"max": {"get": "f"}}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.3)), val);
+        let val = db.eval(r#"{"max": {"get": "ia"}}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(5.0)), val);
+        let val = db.eval(r#"{"max": {"get": "fa"}}"#).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(5.0)), val);
+    }
+    #[test]
+    fn min() {
+        let mut db = test_db();
+        let val = db.eval(&json_fn("min", "b")).unwrap();
+        assert_eq!(Either::Left(JsonVal::Bool(true)), val);
+        let val = db.eval(&json_fn("min", "i")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3)), val);
+        let val = db.eval(&json_fn("min", "f")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.3)), val);
+        let val = db.eval(&json_fn("min", "fa")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(1.0)), val);
+        let val = db.eval(&json_fn("min", "ia")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(1.0)), val);
+    }
+
+    #[test]
+    fn avg() {
+        let mut db = test_db();
+        let val = db.eval(&json_fn("avg", "f")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.3)), val);
+        let val = db.eval(&json_fn("avg", "i")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3)), val);
+        let val = db.eval(&json_fn("avg", "fa")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.0)), val);
+        let val = db.eval(&json_fn("avg", "ia")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.0)), val);        
+    }
+
+    #[test]
+    fn var() {
+        let mut db = test_db();
+        let val = db.eval(&json_fn("var", "f")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.3)), val);
+        let val = db.eval(&json_fn("var", "i")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3)), val);
+        let val = db.eval(&json_fn("var", "fa")).unwrap();
+        assert_approx_eq!(2.56, val_f64(val), 0.0249f64);
+        let val = db.eval(&json_fn("var", "ia")).unwrap();
+        assert_approx_eq!(2.56, val_f64(val), 0.0249f64);        
+    } 
+    
+    #[test]
+    fn dev() {
+        let mut db = test_db();
+        let val = db.eval(&json_fn("dev", "f")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3.3)), val);
+        let val = db.eval(&json_fn("dev", "i")).unwrap();
+        assert_eq!(Either::Left(JsonVal::from(3)), val);
+        let val = db.eval(&json_fn("dev", "fa")).unwrap();
+        assert_approx_eq!(1.4, val_f64(val), 0.0249f64);
+        let val = db.eval(&json_fn("dev", "ia")).unwrap();
+        assert_approx_eq!(1.4, val_f64(val), 0.0249f64);        
+    }     
 }
