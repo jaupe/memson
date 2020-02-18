@@ -39,7 +39,6 @@ impl ReplayLog {
         let buf = Box::new(BufReader::new(&mut self.file));
         let mut cache = Cache::new();
         for line in buf.lines() {
-            println!("line={:?}", line);
             let line = line.map_err(|err| {eprintln!("{:?}", err); "bad line"})?;
             let val: Cmd = serde_json::from_str(&line).map_err(|err| {println!("{:?}", err); "bad json"})?;
 

@@ -235,8 +235,8 @@ pub enum Cmd {
     Del(String),
 }
 
-pub fn parse_json_str(s: &str) -> Res<Cmd> {
-    let json_val = serde_json::from_str(s).map_err(|_| "bad json")?;
+pub fn parse_json_str<S:Into<String>>(s: S) -> Res<Cmd> {
+    let json_val = serde_json::from_str(&s.into()).map_err(|_| "bad json")?;
     parse_json_val(json_val)
 }
 
