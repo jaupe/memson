@@ -5,6 +5,7 @@ use std::fs::{File,OpenOptions};
 use std::path::Path;
 use std::io::{self, BufRead, BufReader, Write};
 use serde_json::Value as JsonVal;
+
 /// The replay log that records all mututations
 /// 
 /// 
@@ -50,5 +51,5 @@ impl ReplayLog {
             }            
         }
         Ok(cache)
-    }   
+    }
 }

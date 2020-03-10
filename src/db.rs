@@ -5,19 +5,8 @@ use crate::json::*;
 use crate::replay::*;
 use std::io::{self};
 
-pub struct Cache {
-    map: BTreeMap<String, JsonVal>,
-}
-
-impl Cache {
-    pub fn new() -> Cache {
-        Cache { map: BTreeMap::new() }
-    }
-
-    pub fn insert(&mut self, key: String, val: JsonVal) -> Option<JsonVal> {
-        self.map.insert(key, val)
-    }
-}
+// Type wrapper
+pub type Cache = BTreeMap<String, JsonVal>;
 
 /// The in-memory database shared amongst all clients.
 ///
@@ -41,15 +30,17 @@ impl Database {
     }
 
     pub fn get(&self, key: &str) -> Option<&JsonVal> {
-        self.cache.map.get(key)
+        self.cache.get(key)
     }
 
     pub fn del(&mut self, key: &str) -> io::Result<Option<JsonVal>> {
         self.log.remove(&key)?;
-        Ok(self.cache.map.remove(key))
+        Ok(self.cache.remove(key))
     }
 
     pub fn eval<'a, S:Into<String>>(&'a mut self, line: S) -> JsonRes<'a> {
+        let line = line.into();
+        println!("line={:?}", line);
         let json_val: Cmd = parse_json_str(line)?;
         eval_json_cmd(json_val, self)
     }
@@ -62,48 +53,48 @@ mod tests {
 
     use assert_approx_eq::assert_approx_eq;
     
-    fn s(key: &str) -> String {
-        "\"".to_string() + key + "\""
+    fn s<S:Into<String>>(arg: S) -> String {
+        "\"".to_string() + &arg.into() + "\""
     }
 
-    fn get(key: &str) -> String {
-        "{\"get\":".to_string() + &s(key) + "}" 
+    fn get<S:Into<String>>(arg: S) -> String {
+        "{\"get\":".to_string() + &arg.into() + "}" 
     }
 
-    fn first(key: &str) -> String {
-        json_fn("first", key)
+    fn first<S:Into<String>>(arg: S) -> String {
+        json_fn("first", arg)
     }
 
-    fn last(key: &str) -> String {
-        json_fn("last", key)
+    fn last<S:Into<String>>(arg: S) -> String {
+        json_fn("last", arg)
     }
 
-    fn max(key: &str) -> String {
-        json_fn("max", key)
+    fn max<S:Into<String>>(arg: S) -> String {
+        json_fn("max", arg)
     }  
     
-    fn min(key: &str) -> String {
-        json_fn("min", key)
+    fn min<S:Into<String>>(arg: S) -> String {
+        json_fn("min", arg)
     } 
     
-    fn avg(key: &str) -> String {
-        json_fn("avg", key)
+    fn avg<S:Into<String>>(arg: S) -> String {
+        json_fn("avg", arg)
     }   
     
-    fn var(key: &str) -> String {
-        json_fn("var", key)
+    fn var<S:Into<String>>(arg: S) -> String {
+        json_fn("var", arg)
     }   
     
-    fn dev(key: &str) -> String {
-        json_fn("dev", key)
+    fn dev<S:Into<String>>(arg: S) -> String {
+        json_fn("dev", arg)
     }       
 
-    fn json_fn(f: &str, key: &str) -> String {
-        "{\"".to_string() + f + "\":\"" + key + "\"}"  
+    fn json_fn<S: Into<String>>(f: &str, arg: S) -> String {
+        "{\"".to_string() + f + "\":" + &arg.into() + "}"  
     }
 
-    fn json_fn_get(f: &str, key: &str) -> String {
-        "{\"".to_string() + f + "\": {\"get\":\"" + key + "\"}}"  
+    fn json_fn_get<S:Into<String>>(f: &str, arg: S) -> String {
+        json_fn(f, get(arg)) 
     }
 
     fn test_db() -> Database {
@@ -128,19 +119,19 @@ mod tests {
     #[test]
     fn open_db() {
         let db = test_db();
-        assert_eq!(7, db.cache.map.len());
+        assert_eq!(7, db.cache.len());
     }
 
     #[test]
     fn test_get() {
         let mut db = test_db();
-        let val = eval(&mut db, get("b"));
+        let val = eval(&mut db, get(s("b")));
         assert_eq!(Either::Right(&JsonVal::Bool(true)), val);
 
         let val = eval(&mut db, "\"b\"");
         assert_eq!(Either::Right(&JsonVal::Bool(true)), val);
 
-        let val = db.eval(get("ia")).unwrap();
+        let val = db.eval(get(s("ia"))).unwrap();
         assert_eq!(
             Either::Right(&JsonVal::Array(vec![
                 JsonVal::from(1),
@@ -152,7 +143,7 @@ mod tests {
             val
         );
 
-        let val = db.eval(&json_fn("get", "i")).unwrap();
+        let val = db.eval(json_fn("get", s("i"))).unwrap();
         assert_eq!(
             Either::Right(&JsonVal::from(3)),
             val
@@ -162,102 +153,105 @@ mod tests {
     #[test]
     fn test_first() {
         let mut db = test_db();
-        let val = eval(&mut db, first("b"));
+        let val = eval(&mut db, first(s("b")));
         assert_eq!(Either::Left(JsonVal::Bool(true)), val);
-        let val = db.eval(&json_fn_get("first", "b")).unwrap();
+        let val = db.eval(&json_fn_get("first", s("b"))).unwrap();
         assert_eq!(Either::Left(JsonVal::Bool(true)), val);
-        let val = db.eval(&json_fn("first", "f")).unwrap();
+        let val = db.eval(&json_fn("first", s("f"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3.3)), val);
-        let val = db.eval(&json_fn("first", "i")).unwrap();
+        let val = db.eval(&json_fn("first", s("i"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3)), val);
-        let val = db.eval(&json_fn("first", "fa")).unwrap();
+        let val = db.eval(&json_fn("first", s("fa"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(1.0)), val);
-        let val = db.eval(&json_fn("first", "ia")).unwrap();
+        let val = db.eval(&json_fn("first", s("ia"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(1)), val);        
     }
 
     #[test]
     fn test_last() {
         let mut db = test_db();
-        let val = eval(&mut db, last("b"));
+        let val = eval(&mut db, last(s("b")));
         assert_eq!(Either::Left(JsonVal::from(true)), val);
-        let val = db.eval(&json_fn_get("last", "b")).unwrap();
+        let val = db.eval(&json_fn_get("last", s("b"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(true)), val);
-        let val = db.eval(&json_fn("last", "f")).unwrap();
+        let val = db.eval(&json_fn("last", s("f"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3.3)), val);
-        let val = db.eval(&json_fn("last", "i")).unwrap();
+        let val = db.eval(&json_fn("last", s("i"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3)), val);
-        let val = db.eval(&json_fn("last", "fa")).unwrap();
+        let val = db.eval(&json_fn("last", s("fa"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(5.0)), val);
-        let val = db.eval(&json_fn("last", "ia")).unwrap();
+        let val = db.eval(&json_fn("last", s("ia"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(5)), val);        
     }
 
     #[test]
     fn test_max() {
         let mut db = test_db();
-        let val = eval(&mut db, max("b"));
+        let val = eval(&mut db, max(s("b")));
         assert_eq!(Either::Left(JsonVal::Bool(true)), val);
-        let val = db.eval(r#"{"max": {"get": "i"}}"#).unwrap();
+        let val = eval(&mut db, max(&get(s("b"))));
+        assert_eq!(Either::Left(JsonVal::Bool(true)), val);
+        let val = eval(&mut db, max(&get(s("i"))));
         assert_eq!(Either::Left(JsonVal::from(3)), val);
-        let val = db.eval(r#"{"max": {"get": "f"}}"#).unwrap();
+        let val = eval(&mut db, max(s("f")));
         assert_eq!(Either::Left(JsonVal::from(3.3)), val);
-        let val = db.eval(r#"{"max": {"get": "ia"}}"#).unwrap();
+        let val = eval(&mut db, max(s("ia")));
         assert_eq!(Either::Left(JsonVal::from(5.0)), val);
-        let val = db.eval(r#"{"max": {"get": "fa"}}"#).unwrap();
+        let val = eval(&mut db, max(s("fa")));
         assert_eq!(Either::Left(JsonVal::from(5.0)), val);
     }
+
     #[test]
     fn test_min() {
         let mut db = test_db();
-        let val = eval(&mut db, min("b"));
+        let val = eval(&mut db, min(s("b")));
         assert_eq!(Either::Left(JsonVal::Bool(true)), val);
-        let val = eval(&mut db, min("i"));
+        let val = eval(&mut db, min(s("i")));
         assert_eq!(Either::Left(JsonVal::from(3)), val);
-        let val = eval(&mut db, min("f"));
+        let val = eval(&mut db, min(s("f")));
         assert_eq!(Either::Left(JsonVal::from(3.3)), val);
-        let val = eval(&mut db, min("fa"));
+        let val = eval(&mut db, min(s("fa")));
         assert_eq!(Either::Left(JsonVal::from(1.0)), val);
-        let val = eval(&mut db, min("ia"));
+        let val = eval(&mut db, min(s("ia")));
         assert_eq!(Either::Left(JsonVal::from(1.0)), val);
     }
 
     #[test]
     fn test_avg() {
         let mut db = test_db();
-        let val = eval(&mut db, avg("f"));
+        let val = eval(&mut db, avg(s("f")));
         assert_eq!(Either::Left(JsonVal::from(3.3)), val);
-        let val = db.eval(&json_fn("avg", "i")).unwrap();
+        let val = db.eval(&json_fn("avg", s("i"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3)), val);
-        let val = db.eval(&json_fn("avg", "fa")).unwrap();
+        let val = db.eval(&json_fn("avg", s("fa"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3.0)), val);
-        let val = db.eval(&json_fn("avg", "ia")).unwrap();
+        let val = db.eval(&json_fn("avg", s("ia"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3.0)), val);        
     }
 
     #[test]
     fn test_var() {
         let mut db = test_db();
-        let val = eval(&mut db, var("f"));
+        let val = eval(&mut db, var(s("f")));
         assert_eq!(Either::Left(JsonVal::from(3.3)), val);
-        let val = db.eval(&json_fn("var", "i")).unwrap();
+        let val = db.eval(&json_fn("var", s("i"))).unwrap();
         assert_eq!(Either::Left(JsonVal::from(3)), val);
-        let val = db.eval(&json_fn("var", "fa")).unwrap();
+        let val = db.eval(&json_fn("var", s("fa"))).unwrap();
         assert_approx_eq!(2.56, val_f64(val), 0.0249f64);
-        let val = db.eval(&json_fn("var", "ia")).unwrap();
+        let val = db.eval(&json_fn("var", s("ia"))).unwrap();
         assert_approx_eq!(2.56, val_f64(val), 0.0249f64);        
     } 
     
     #[test]
     fn test_dev() {
         let mut db = test_db();
-        let val = eval(&mut db, dev("f"));
+        let val = eval(&mut db, dev(s("f")));
         assert_eq!(Either::Left(JsonVal::from(3.3)), val);
-        let val = db.eval(&json_fn("dev", "i")).unwrap();
+        let val = eval(&mut db, dev(s("i")));
         assert_eq!(Either::Left(JsonVal::from(3)), val);
-        let val = db.eval(&json_fn("dev", "fa")).unwrap();
+        let val = eval(&mut db, dev(s("fa")));
         assert_approx_eq!(1.4, val_f64(val), 0.0249f64);
-        let val = db.eval(&json_fn("dev", "ia")).unwrap();
+        let val = eval(&mut db, dev(s("ia")));
         assert_approx_eq!(1.4, val_f64(val), 0.0249f64);        
-    }     
+    }
 }
