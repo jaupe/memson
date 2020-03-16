@@ -8,8 +8,6 @@ use serde_json::Value as JsonVal;
 
 /// The replay log that records all mututations
 /// 
-/// 
-/// 
 pub struct ReplayLog {
     file: File,
 }

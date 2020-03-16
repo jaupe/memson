@@ -2,8 +2,6 @@
 //!
 //! JSON structures are stored by a string key.
 //!
-
-
 #![warn(rust_2018_idioms)]
 
 use clap::{App, Arg};
@@ -84,10 +82,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
 
-    let log = matches.value_of("log").unwrap_or("memson.log");
+    let log = matches.value_of("log").unwrap_or("log.json");
     // Parse the address we're going to run this server on
     // and set up our TCP listener to accept connections.
-    let host = matches.value_of("host").unwrap_or("0.0.0.0");
+    let host = matches.value_of("host").unwrap_or("127.0.0.1");
     let port = matches.value_of("port").unwrap_or("8000");
     let addr = host.to_string() + ":" + port;
     println!("replaying write log: {:?}", log);
@@ -100,7 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // each independently spawned client will have a reference to the in-memory
     // database.
 
-    let db: Database = Database::open(&addr).unwrap();
+    let db: Database = Database::open(log).unwrap();
     let db: Arc<Mutex<Database>> = Arc::new(Mutex::new(db));
     loop {
         match listener.accept().await {
@@ -156,7 +154,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 fn handle_request(line: &str, db_lock: &Arc<Mutex<Database>>) -> Res<Response> {
     let mut db = db_lock.lock().unwrap();
     let val = db.eval(line);
-    println!("{:?}", val);
     let val = match val {
         Ok(Either::Left(lhs)) => Response::Value {
             value: lhs,

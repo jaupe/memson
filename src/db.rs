@@ -38,9 +38,8 @@ impl Database {
         Ok(self.cache.remove(key))
     }
 
-    pub fn eval<'a, S:Into<String>>(&'a mut self, line: S) -> JsonRes<'a> {
+    pub fn eval<S:Into<String>>(&mut self, line: S) -> JsonRes<'_> {
         let line = line.into();
-        println!("line={:?}", line);
         let json_val: Cmd = parse_json_str(line)?;
         eval_json_cmd(json_val, self)
     }
