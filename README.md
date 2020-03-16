@@ -1,8 +1,8 @@
 # memson
 
-memson is an in-memory key-value cache to store, retrieve and aggregate JSON data. 
+memson is an in-memory key-value store to store, retrieve and aggregate JSON data. 
 
-It is similar to Reddis but it treats JSON as a first class citizen and treats JSON as code.
+It is similar to Reddis but it treats JSON as a first-class citizen. It also allows All of memson's functions 
 
 ## Tutorial
 
@@ -44,22 +44,22 @@ null // it is null as it's a new entry; otherwise it would return the previous v
 
 ## Frequently Asked Questions
 
-* Why use Memson over Reddis?
+* **Why use Memson over Reddis?**
 
 Redis treats JSON as strings so Redis functions cannot be used against JSON. Memson treats JSON as a first class citizen so you can use aggregation functions against JSON. Memson also has more sophisticated aggregation functions that can be together.
 
-* Does it offer persistence if restarted?
+* **Does it offer persistence if restarted?**
 
 ## Cookbook
 
-* storing JSON value by key
+* **storing JSON value by key**
 
 ``` json
 // sets an array to the key "foo"
 {"set": ["john", "mayer"]}
 ```
 
-* retrieving JSON value by key
+* **retrieving JSON value by key**
 
 ``` json
 // get key using JSON object
@@ -68,7 +68,7 @@ Redis treats JSON as strings so Redis functions cannot be used against JSON. Mem
 
 ## Functions
 
-* max
+* **max**
 
 returns the highest value in the JSON key/val
 
@@ -76,7 +76,7 @@ returns the highest value in the JSON key/val
 {"max": {"get": "foo"}}
 ```
 
-* min
+* **min**
 
 returns the lowest value in the JSON key/val
 
@@ -84,7 +84,7 @@ returns the lowest value in the JSON key/val
 {"min": {"get": "foo"}}
 ```
 
-* avg
+* **avg**
 
 returns the arithemtic mean of the JSON key/val (if applicable)
 
@@ -92,7 +92,7 @@ returns the arithemtic mean of the JSON key/val (if applicable)
 {"avg": {"get": "foo"}}
 ```
 
-* var
+* **var**
 
 returns the variance of the JSON key/val (if applicable)
 
@@ -100,7 +100,7 @@ returns the variance of the JSON key/val (if applicable)
 {"var": {"get": "foo"}}
 ```
 
-* dev
+* **dev**
 
 returns the standard deviation of the JSON key/val (if applicable)
 
@@ -108,7 +108,7 @@ returns the standard deviation of the JSON key/val (if applicable)
 {"dev": {"get": "foo"}}
 ```
 
-* sum
+* **sum**
 
 returns the summation of the JSON key/val (if applicable)
 
@@ -116,7 +116,7 @@ returns the summation of the JSON key/val (if applicable)
 {"sum": {"get": "foo"}}
 ```
 
-* first 
+* **first**
 
 returns the first element of the JSON key/val
 
@@ -124,10 +124,10 @@ returns the first element of the JSON key/val
 {"first": {"get": "foo"}}
 ```
 
-* last 
+* **last** 
 
 returns the last element of the JSON key/val
 
 ``` json
-{"first": {"get": "last"}}
+{"last": {"get": "last"}}
 ```
