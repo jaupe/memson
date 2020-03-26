@@ -9,7 +9,6 @@ use tokio::net::TcpListener;
 use tokio_util::codec::{Framed, LinesCodec};
 
 use db::*;
-use either::Either;
 use futures::{SinkExt, StreamExt};
 
 use serde::{Deserialize, Serialize};
@@ -82,13 +81,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
 
-    let log = matches.value_of("log").unwrap_or("log.json");
+    let log = matches.value_of("log").unwrap_or("log.memson");
     // Parse the address we're going to run this server on
     // and set up our TCP listener to accept connections.
     let host = matches.value_of("host").unwrap_or("127.0.0.1");
     let port = matches.value_of("port").unwrap_or("8000");
     let addr = host.to_string() + ":" + port;
-    println!("replaying write log: {:?}", log);
+    println!("replaying log: {:?}", log);
     println!("listening on: {:?}", addr);
     let mut listener = TcpListener::bind(&addr).await?;
 
@@ -155,12 +154,9 @@ fn handle_request(line: &str, db_lock: &Arc<Mutex<Database>>) -> Res<Response> {
     let mut db = db_lock.lock().unwrap();
     let val = db.eval(line);
     let val = match val {
-        Ok(Either::Left(lhs)) => Response::Value {
-            value: lhs,
-        },
-        Ok(Either::Right(rhs)) => Response::Value {
-            value: rhs.clone(),
-        },
+        Ok(val) => Response::Value {
+            value: val,
+        },        
         Err(msg) => {
             eprintln!("error: {}", msg);
             Response::Value {
