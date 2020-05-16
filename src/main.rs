@@ -18,8 +18,8 @@ use std::sync::{Arc, Mutex};
 
 mod db;
 mod json;
-mod parse;
-mod replay;
+mod log;
+mod query;
 
 type Res<T> = Result<T, &'static str>;
 
@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // each independently spawned client will have a reference to the in-memory
     // database.
 
-    let db: Database = Database::open(log).unwrap();
+    let db: Database = Database::open("./", "db").unwrap();
     let db: Arc<Mutex<Database>> = Arc::new(Mutex::new(db));
     loop {
         match listener.accept().await {
@@ -154,9 +154,7 @@ fn handle_request(line: &str, db_lock: &Arc<Mutex<Database>>) -> Res<Response> {
     let mut db = db_lock.lock().unwrap();
     let val = db.eval(line);
     let val = match val {
-        Ok(val) => Response::Value {
-            value: val,
-        },        
+        Ok(val) => Response::Value { value: val },
         Err(msg) => {
             eprintln!("error: {}", msg);
             Response::Value {

@@ -84,7 +84,7 @@ fn json_add(lhs: &JsonVal, rhs: &JsonVal) -> Res<JsonVal> {
         (JsonVal::Array(lhs), JsonVal::Number(rhs)) => json_add_arr_num(lhs, rhs),
         (JsonVal::Number(rhs), JsonVal::Array(lhs)) => json_add_arr_num(lhs, rhs),
         (JsonVal::Number(lhs), JsonVal::Number(rhs)) => json_add_nums(lhs, rhs),
-        (JsonVal::String(lhs), JsonVal::String(rhs)) => json_add_str(lhs, rhs),    
+        (JsonVal::String(lhs), JsonVal::String(rhs)) => json_add_str(lhs, rhs),
         (JsonVal::String(lhs), JsonVal::Array(rhs)) => add_str_arr(lhs, rhs),
         (JsonVal::Array(lhs), JsonVal::String(rhs)) => add_arr_str(lhs, rhs),
         _ => Err(BAD_TYPE),
@@ -231,7 +231,6 @@ fn add_val_str(x: &JsonVal, y: &str) -> Res<JsonVal> {
     }
 }
 
-
 fn add_arr_str(lhs: &[JsonVal], rhs: &str) -> Res<JsonVal> {
     let mut arr = Vec::with_capacity(lhs.len());
     for x in lhs {
@@ -249,7 +248,7 @@ fn json_add_arr_num(x: &[JsonVal], y: &JsonNum) -> Res<JsonVal> {
     Ok(JsonVal::Array(arr))
 }
 
-fn json_add_arrs<'a>(lhs: &[JsonVal], rhs: &[JsonVal]) -> Res<JsonVal> {
+fn json_add_arrs(lhs: &[JsonVal], rhs: &[JsonVal]) -> Res<JsonVal> {
     let vec = lhs
         .iter()
         .zip(rhs.iter())
@@ -279,7 +278,7 @@ fn json_sub_num_arr(x: &JsonNum, y: &[JsonVal]) -> Res<JsonVal> {
     Ok(JsonVal::Array(arr))
 }
 
-fn json_sub_arrs<'a>(lhs: &[JsonVal], rhs: &[JsonVal]) -> Res<JsonVal> {
+fn json_sub_arrs(lhs: &[JsonVal], rhs: &[JsonVal]) -> Res<JsonVal> {
     let vec = lhs
         .iter()
         .zip(rhs.iter())
@@ -631,12 +630,8 @@ fn parse_div(val: JsonVal) -> Res<Cmd> {
 
 pub fn eval_json_cmd(cmd: Cmd, db: &mut Database) -> Res<JsonVal> {
     match cmd {
-        Cmd::Get(ref key) => db.get(key).map(|x| x.clone()).ok_or(BAD_KEY),
-        Cmd::Del(ref key) => match db.del(key) {
-            Ok(Some(val)) => Ok(val),
-            Ok(None) => Ok(JsonVal::Null),
-            Err(_) => Err(BAD_IO),
-        },
+        Cmd::Get(ref key) => unimplemented!(),
+        Cmd::Del(ref key) => unimplemented!(),
         Cmd::Set(key, val) => db_write(db, key, val),
         Cmd::Sum(arg) => eval_sum(*arg, db),
         Cmd::Min(arg) => eval_min(*arg, db),
@@ -654,12 +649,8 @@ pub fn eval_json_cmd(cmd: Cmd, db: &mut Database) -> Res<JsonVal> {
     }
 }
 
-fn db_write(db: &mut Database, key: String, val: JsonVal) -> Res<JsonVal> {
-    match db.set(key, val) {
-        Ok(Some(val)) => Ok(val),
-        Ok(None) => Ok(JsonVal::Null),
-        Err(_) => Err(BAD_WRITE),
-    }
+fn db_write(db: &mut Database, table: String, val: JsonVal) -> Res<JsonVal> {
+    unimplemented!()
 }
 
 fn eval_sum(arg: Cmd, db: &mut Database) -> Res<JsonVal> {

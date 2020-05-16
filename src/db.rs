@@ -1,50 +1,147 @@
 use crate::json::*;
-use crate::replay::*;
+use crate::log::*;
+use crate::query::Query;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonVal;
 use std::collections::BTreeMap;
 use std::io::{self};
 use std::path::Path;
+use std::path::PathBuf;
+
+#[derive(Debug, Deserialize, Serialize)]
+pub enum Cmd {
+    Insert(String, Vec<JsonVal>),
+    Delete(String),
+    Query(Query),
+}
+
+#[derive(Debug)]
+pub struct Table {
+    name: String,
+    rows: Vec<JsonVal>,
+    log: ReplayLog,
+}
+
+impl Table {
+    pub fn new<S: Into<String>, P: AsRef<Path>>(name: S, path: P, rows: Vec<JsonVal>) -> Res<Self> {
+        let mut path_buf = PathBuf::new();
+        path_buf.push(path);
+        let name = name.into();
+        path_buf.push(name.clone() + ".table");
+        let log = ReplayLog::new(path_buf, &rows).map_err(|_| "cannot create replay log")?;
+        Ok(Table {
+            name: name.into(),
+            rows,
+            log,
+        })
+    }
+
+    pub fn open<S: Into<String>, P: AsRef<Path>>(name: S, path: P) -> Res<Self> {
+        let mut log = ReplayLog::open(path).map_err(|_| "cannot open replay log")?;
+        let rows = log.replay()?;
+        Ok(Table {
+            name: name.into(),
+            rows,
+            log,
+        })
+    }
+
+    pub fn from<S: Into<String>>(name: S, rows: Vec<JsonVal>, log: ReplayLog) -> Self {
+        Self {
+            name: name.into(),
+            rows,
+            log,
+        }
+    }
+
+    pub fn insert(&mut self, rows: Vec<JsonVal>) -> io::Result<()> {
+        self.log.insert(&rows)?;
+        self.rows.extend(rows);
+        Ok(())
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+}
 
 // Type wrapper
-pub type Cache = BTreeMap<String, JsonVal>;
+pub type Cache = BTreeMap<String, Table>;
 
 /// The in-memory database shared amongst all clients.
 ///
 /// This database will be shared via `Arc`, so to mutate the internal map we're
 /// going to use a `Mutex` for interior mutability.
+#[derive(Debug)]
 pub struct Database {
-    cache: Cache,
-    log: ReplayLog,
+    root_path: PathBuf,
+    tables: Vec<Table>,
+    log: DbConfig,
 }
 
 impl Database {
-    pub fn open<P: AsRef<Path>>(path: P) -> Res<Database> {
-        let mut log = ReplayLog::open(path).map_err(|err| {
-            eprintln!("{:?}", err);
-            "bad io"
-        })?;
-        let cache = log.replay()?;
-        Ok(Database { cache, log })
+    pub fn open<P: AsRef<Path>, S: Into<String>>(path: P, name: S) -> Res<Database> {
+        let mut root_path = PathBuf::new();
+        root_path.push(path);
+        let mut log = DbConfig::open(&root_path, name).map_err(|_| "cannot open db config file")?;
+        let tables = log.load()?;
+        Ok(Database {
+            root_path,
+            tables,
+            log,
+        })
     }
 
-    pub fn set(&mut self, key: String, val: JsonVal) -> io::Result<Option<JsonVal>> {
-        self.log.write(&key, &val)?;
-        Ok(self.cache.insert(key, val))
+    pub fn insert(&mut self, table: Table) -> io::Result<()> {
+        self.log.insert(table.name())?;
+        self.tables.push(table);
+        Ok(())
     }
 
-    pub fn get(&self, key: &str) -> Option<&JsonVal> {
-        self.cache.get(key)
+    pub fn delete(&mut self, tbl_name: &str) -> io::Result<bool> {
+        self.log.remove(tbl_name)?;
+        let found = self.tables.iter().position(|t| t.name() == tbl_name);
+        Ok(match found {
+            Some(index) => {
+                self.tables.remove(index);
+                true
+            }
+            None => false,
+        })
     }
 
-    pub fn del(&mut self, key: &str) -> io::Result<Option<JsonVal>> {
-        self.log.remove(&key)?;
-        Ok(self.cache.remove(key))
+    pub fn eval_cmd(&mut self, cmd: Cmd) -> Res<Option<JsonVal>> {
+        match cmd {
+            Cmd::Insert(name, rows) => {
+                self.insert_table(name, rows)?;
+                Ok(None)
+            }
+            _ => unimplemented!(),
+        }
     }
 
     pub fn eval<S: Into<String>>(&mut self, line: S) -> Res<JsonVal> {
         let line = line.into();
-        let json_val: Cmd = parse_json_str(line)?;
-        eval_json_cmd(json_val, self)
+        unimplemented!()
+    }
+
+    pub fn insert_table(&mut self, name: String, rows: Vec<JsonVal>) -> Res<()> {
+        let pos = self.table_exits(&name);
+        if pos.is_some() {
+            Err("table already exists")
+        } else {
+            let tbl = Table::new(name, self.root_path.clone(), rows)?;
+            self.tables.push(tbl);
+            Ok(())
+        }
+    }
+
+    pub fn table_exits(&self, name: &str) -> Option<usize> {
+        self.tables.iter().position(|t| t.name() == name)
     }
 }
 
@@ -52,7 +149,7 @@ impl Database {
 mod tests {
     use super::*;
 
-    use assert_approx_eq::assert_approx_eq;
+    use std::fs::remove_file;
 
     fn add<S: Into<String>>(x: S, y: S) -> String {
         "{\"+\":[".to_string() + &x.into() + "," + &y.into() + "]}"
@@ -107,7 +204,7 @@ mod tests {
     }
 
     fn test_db() -> Database {
-        Database::open("test.memson").unwrap()
+        unimplemented!()
     }
 
     fn json_f64(v: &JsonVal) -> f64 {
@@ -126,6 +223,27 @@ mod tests {
         Err("bad type")
     }
 
+    #[test]
+    fn insert_cmd_ok() {
+        let mut db = Database::open("./", "test").unwrap();
+        let cmd = Cmd::Insert(
+            "t".to_string(),
+            vec![JsonVal::from(1), JsonVal::from(2.1), JsonVal::from("s")],
+        );
+        db.eval_cmd(cmd).unwrap();
+        assert_eq!(db.tables.len(), 1);
+        let tbl = &db.tables[0];
+        assert_eq!(tbl.name(), "t");
+        assert_eq!(tbl.len(), 3);
+        assert_eq!(tbl.rows[0], JsonVal::from(1));
+        assert_eq!(tbl.rows[1], JsonVal::from(2.1));
+        assert_eq!(tbl.rows[2], JsonVal::from("s"));
+
+        remove_file("./test.db").unwrap();
+        remove_file("./t.table").unwrap();
+    }
+
+    /*
     #[test]
     fn open_db() {
         let mut db = test_db();
@@ -166,7 +284,9 @@ mod tests {
         );
         assert_eq!(db_get(&mut db, "z"), Ok(JsonVal::from(2.0)));
     }
+    */
 
+    /*
     #[test]
     fn test_get() {
         let mut db = test_db();
@@ -191,7 +311,9 @@ mod tests {
         let val = db.eval(get("i"));
         assert_eq!(Ok(JsonVal::from(3)), val);
     }
+    */
 
+    /*
     #[test]
     fn test_first() {
         let mut db = test_db();
@@ -207,7 +329,9 @@ mod tests {
         let val = db.eval(first(get("ia")));
         assert_eq!(Ok(JsonVal::from(1)), val);
     }
+    */
 
+    /*
     #[test]
     fn test_last() {
         let mut db = test_db();
@@ -223,7 +347,9 @@ mod tests {
         let val = db.eval(last(get("ia")));
         assert_eq!(Ok(JsonVal::from(5)), val);
     }
+    */
 
+    /*
     #[test]
     fn test_max() {
         let mut db = test_db();
@@ -333,25 +459,32 @@ mod tests {
             ])),
             eval(&mut db, add(get("ia"), get("ia")))
         );
-        assert_eq!(Ok(JsonVal::Array(vec![
-           JsonVal::from("ahello"),
-           JsonVal::from("bhello"),
-           JsonVal::from("chello"),
-           JsonVal::from("dhello"), 
-        ])), db.eval(add(get("sa"), get("s"))));
-        assert_eq!(Ok(JsonVal::Array(vec![
-           JsonVal::from("helloa"),
-           JsonVal::from("hellob"),
-           JsonVal::from("helloc"),
-           JsonVal::from("hellod"),
-        ])), db.eval(add(get("s"), get("sa")))); 
-        assert_eq!(Ok(JsonVal::from("hellohello")), db.eval(add(get("s"), get("s"))));        
-        
+        assert_eq!(
+            Ok(JsonVal::Array(vec![
+                JsonVal::from("ahello"),
+                JsonVal::from("bhello"),
+                JsonVal::from("chello"),
+                JsonVal::from("dhello"),
+            ])),
+            db.eval(add(get("sa"), get("s")))
+        );
+        assert_eq!(
+            Ok(JsonVal::Array(vec![
+                JsonVal::from("helloa"),
+                JsonVal::from("hellob"),
+                JsonVal::from("helloc"),
+                JsonVal::from("hellod"),
+            ])),
+            db.eval(add(get("s"), get("sa")))
+        );
+        assert_eq!(
+            Ok(JsonVal::from("hellohello")),
+            db.eval(add(get("s"), get("s")))
+        );
         assert_eq!(bad_type(), db.eval(add(get("s"), get("f"))));
         assert_eq!(bad_type(), db.eval(add(get("f"), get("s"))));
         assert_eq!(bad_type(), db.eval(add(get("i"), get("s"))));
         assert_eq!(bad_type(), db.eval(add(get("s"), get("i"))));
-
     }
 
     #[test]
@@ -473,6 +606,7 @@ mod tests {
         assert_eq!(bad_type(), db.eval(div(get("sa"), get("s"))));
         assert_eq!(bad_type(), db.eval(div(get("s"), get("sa"))));
         assert_eq!(bad_type(), db.eval(div(get("i"), get("s"))));
-        assert_eq!(bad_type(), db.eval(div(get("s"), get("i"))));        
+        assert_eq!(bad_type(), db.eval(div(get("s"), get("i"))));
     }
+    */
 }
