@@ -4,6 +4,7 @@ use crate::query::Query;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonVal;
 use std::collections::BTreeMap;
+use std::fs;
 use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
@@ -23,12 +24,12 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new<S: Into<String>, P: AsRef<Path>>(name: S, path: P, rows: Vec<JsonVal>) -> Res<Self> {
+    pub fn new<S: Into<String>, P: AsRef<Path>>(name: S, path: P, rows: Vec<JsonVal>) -> io::Result<Self> {
         let mut path_buf = PathBuf::new();
         path_buf.push(path);
         let name = name.into();
         path_buf.push(name.clone() + ".table");
-        let log = ReplayLog::new(path_buf, &rows).map_err(|_| "cannot create replay log")?;
+        let log = ReplayLog::new(path_buf, &rows)?;
         Ok(Table {
             name: name.into(),
             rows,
@@ -102,23 +103,30 @@ impl Database {
         Ok(())
     }
 
-    pub fn delete(&mut self, tbl_name: &str) -> io::Result<bool> {
-        self.log.remove(tbl_name)?;
+    pub fn delete_table(&mut self, tbl_name: &str) -> io::Result<bool> {
+        self.log.remove_table(tbl_name)?;
         let found = self.tables.iter().position(|t| t.name() == tbl_name);
         Ok(match found {
             Some(index) => {
                 self.tables.remove(index);
+                let mut path = self.root_path.clone();
+                path.push(tbl_name.to_string() + ".table");
+                fs::remove_file(path)?;
                 true
             }
             None => false,
         })
     }
 
-    pub fn eval_cmd(&mut self, cmd: Cmd) -> Res<Option<JsonVal>> {
+    pub fn eval_cmd(&mut self, cmd: Cmd) -> Res<()> {
         match cmd {
             Cmd::Insert(name, rows) => {
-                self.insert_table(name, rows)?;
-                Ok(None)
+                self.insert_table(name, rows).map_err(|_| "cannot insert")?;
+                Ok(())
+            }
+            Cmd::Delete(name) => {
+                self.delete_table(&name).map_err(|_| "cannot delete table")?;
+                Ok(())
             }
             _ => unimplemented!(),
         }
@@ -129,14 +137,21 @@ impl Database {
         unimplemented!()
     }
 
-    pub fn insert_table(&mut self, name: String, rows: Vec<JsonVal>) -> Res<()> {
-        let pos = self.table_exits(&name);
-        if pos.is_some() {
-            Err("table already exists")
-        } else {
-            let tbl = Table::new(name, self.root_path.clone(), rows)?;
-            self.tables.push(tbl);
-            Ok(())
+    pub fn find_table(&mut self, name: &str) -> Option<&mut Table> {
+        self.tables.iter_mut().find(|x| x.name() == name)
+    }
+
+    pub fn insert_table(&mut self, name: String, rows: Vec<JsonVal>) -> io::Result<()> {
+        let r = self.find_table(&name);
+        match r {
+            Some(tbl) => {
+                tbl.insert(rows)
+            }
+            None => {
+                let tbl = Table::new(name, self.root_path.clone(), rows)?;
+                self.tables.push(tbl);
+                Ok(())
+            }
         }
     }
 
@@ -224,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_cmd_ok() {
+    fn insert_new_table_ok() {
         let mut db = Database::open("./", "test").unwrap();
         let cmd = Cmd::Insert(
             "t".to_string(),
@@ -241,6 +256,54 @@ mod tests {
 
         remove_file("./test.db").unwrap();
         remove_file("./t.table").unwrap();
+    }
+
+    #[test]
+    fn delete_table_ok() {
+        // populate db with test table
+        let mut db = Database::open("./", "test3").unwrap();
+        db.eval_cmd(Cmd::Insert(
+            "foo".to_string(),
+            vec![JsonVal::from(1), JsonVal::from(2.1), JsonVal::from("s")],
+        ))
+        .unwrap();
+
+        assert_eq!(db.tables.len(), 1);
+        // delete table
+        db.eval_cmd(Cmd::Delete("foo".to_string())).unwrap();
+        // assert state
+        assert_eq!(db.tables.len(), 0);
+        remove_file("./test3.db").unwrap();
+    }
+
+    #[test]
+    fn append_to_table_ok() {
+        let mut db = Database::open("./", "append").unwrap();
+        // create table
+        let cmd = Cmd::Insert(
+            "append".to_string(),
+            vec![JsonVal::from(1), JsonVal::from(2.1), JsonVal::from("s")],
+        );
+        db.eval_cmd(cmd).unwrap();
+        // append data to table
+        let cmd = Cmd::Insert(
+            "append".to_string(),
+            vec![JsonVal::from(2), JsonVal::from(3.1), JsonVal::from("t")],
+        );
+        db.eval_cmd(cmd).unwrap();
+        assert_eq!(db.tables.len(), 1);
+        let tbl = &db.tables[0];
+        assert_eq!(tbl.name(), "append");
+        assert_eq!(tbl.len(), 6);
+        assert_eq!(tbl.rows[0], JsonVal::from(1));
+        assert_eq!(tbl.rows[1], JsonVal::from(2.1));
+        assert_eq!(tbl.rows[2], JsonVal::from("s"));
+        assert_eq!(tbl.rows[3], JsonVal::from(2));
+        assert_eq!(tbl.rows[4], JsonVal::from(3.1));
+        assert_eq!(tbl.rows[5], JsonVal::from("t"));
+
+        remove_file("./append.db").unwrap();
+        remove_file("./append.table").unwrap();
     }
 
     /*

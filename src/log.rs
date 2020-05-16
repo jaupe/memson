@@ -1,5 +1,5 @@
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -17,16 +17,17 @@ fn open_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
         .open(path)
 }
 
-#[derive(Debug)]
-pub struct DbConfig {
-    root_path: PathBuf,
-    file: File,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct TableConfig {
-    key: String,
-    val: PathBuf,
+    table: String,
+    path: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct DbConfig {
+    name: String,
+    root_path: PathBuf,
+    file: File,
 }
 
 impl DbConfig {
@@ -34,19 +35,22 @@ impl DbConfig {
         let mut root_path = PathBuf::new();
         root_path.push(root);
         let mut path = root_path.clone();
-        path.push(name.into() + ".db");
+        let name = name.into();
+        let test_db = name.clone() + ".db";
+        path.push(test_db);
         let file = open_file(path)?;
-        Ok(Self { root_path, file })
+        Ok(Self {
+            name,
+            root_path,
+            file,
+        })
     }
 
     pub fn insert<S: Into<String>>(&mut self, table: S) -> io::Result<()> {
         let mut path = self.root_path.clone();
         let name = table.into();
         path.push(name.to_string() + ".table");
-        let tbl_config = TableConfig {
-            key: name,
-            val: path,
-        };
+        let tbl_config = TableConfig { table: name, path };
         let line = serde_json::to_string(&tbl_config).unwrap() + "\n";
         self.file.write_all(line.as_bytes())
     }
@@ -57,16 +61,38 @@ impl DbConfig {
         //TODO parallelize this
         for line in buf.lines() {
             let line = line.map_err(|_| "cannot read db config line")?;
-            let kv: TableConfig =
+            let config: TableConfig =
                 serde_json::from_str(&line).map_err(|_| "cannot deserialize table config")?;
-            let table = Table::open(kv.key, kv.val).map_err(|_| "")?;
+            let table = Table::open(config.table, config.path).map_err(|_| "")?;
             tables.push(table);
         }
         Ok(tables)
     }
 
-    pub fn remove<S: Into<String>>(&mut self, table: S) -> io::Result<Vec<Table>> {
-        unimplemented!()
+    pub fn remove_table<S: Into<String>>(&mut self, tbl_name: S) -> io::Result<()> {
+        // create new meta file
+        let mut path_buf = self.root_path.clone();
+        let tbl_name = tbl_name.into();
+        let tmp_path = tbl_name.clone() + ".copy.table";
+        path_buf.push(&tmp_path);
+        let mut file = open_file(path_buf)?;
+        // read old meta file and write to new one minus the removed table
+        self.file.seek(SeekFrom::Start(0))?;
+        let buf = Box::new(BufReader::new(&mut self.file));
+        for line in buf.lines() {
+            let line = line?;
+            let config: TableConfig = serde_json::from_str(&line)?;
+            if config.table != tbl_name {
+                let json = serde_json::to_string(&config)? + "\n";
+                file.write_all(json.as_bytes())?;
+            }
+        }
+        // replace old meta file with new one
+        let mut old_path = self.root_path.clone();
+        old_path.push(tbl_name + ".table");
+        fs::copy(&tmp_path, old_path)?;
+        fs::remove_file(&tmp_path)?;
+        Ok(())
     }
 }
 
