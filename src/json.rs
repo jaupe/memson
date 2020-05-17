@@ -1,8 +1,9 @@
-use crate::db::Database;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value as JsonVal};
 use serde_json::Number as JsonNum;
 use serde_json::Number;
-use serde_json::{Map, Value as JsonVal};
+
+use crate::db::Database;
 
 pub type Res<T> = Result<T, &'static str>;
 

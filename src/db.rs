@@ -1,17 +1,21 @@
-use crate::json::*;
-use crate::log::*;
-use crate::query::Query;
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonVal;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+use serde_json::{Value as JsonVal};
+
+use crate::json::*;
+use crate::log::*;
+use crate::query::{Expr, Query};
+
+use crate::Row;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Cmd {
-    Insert(String, Vec<JsonVal>),
+    Insert(String, Vec<Row>),
     Delete(String),
     Query(Query),
 }
@@ -19,12 +23,12 @@ pub enum Cmd {
 #[derive(Debug)]
 pub struct Table {
     name: String,
-    rows: Vec<JsonVal>,
+    rows: Vec<Row>,
     log: ReplayLog,
 }
 
 impl Table {
-    pub fn new<S: Into<String>, P: AsRef<Path>>(name: S, path: P, rows: Vec<JsonVal>) -> io::Result<Self> {
+    pub fn new<S: Into<String>, P: AsRef<Path>>(name: S, path: P, rows: Vec<Row>) -> io::Result<Self> {
         let mut path_buf = PathBuf::new();
         path_buf.push(path);
         let name = name.into();
@@ -47,7 +51,7 @@ impl Table {
         })
     }
 
-    pub fn from<S: Into<String>>(name: S, rows: Vec<JsonVal>, log: ReplayLog) -> Self {
+    pub fn from<S: Into<String>>(name: S, rows: Vec<Row>, log: ReplayLog) -> Self {
         Self {
             name: name.into(),
             rows,
@@ -55,7 +59,7 @@ impl Table {
         }
     }
 
-    pub fn insert(&mut self, rows: Vec<JsonVal>) -> io::Result<()> {
+    pub fn insert(&mut self, rows: Vec<Row>) -> io::Result<()> {
         self.log.insert(&rows)?;
         self.rows.extend(rows);
         Ok(())
@@ -67,6 +71,10 @@ impl Table {
 
     pub fn len(&self) -> usize {
         self.rows.len()
+    }
+
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
     }
 }
 
@@ -137,12 +145,16 @@ impl Database {
         unimplemented!()
     }
 
-    pub fn find_table(&mut self, name: &str) -> Option<&mut Table> {
+    pub fn find_table(&self, name: &str) -> Option<&Table> {
+        self.tables.iter().find(|x| x.name() == name)
+    }
+
+    pub fn find_table_mut(&mut self, name: &str) -> Option<&mut Table> {
         self.tables.iter_mut().find(|x| x.name() == name)
     }
 
-    pub fn insert_table(&mut self, name: String, rows: Vec<JsonVal>) -> io::Result<()> {
-        let r = self.find_table(&name);
+    pub fn insert_table(&mut self, name: String, rows: Vec<Row>) -> io::Result<()> {
+        let r = self.find_table_mut(&name);
         match r {
             Some(tbl) => {
                 tbl.insert(rows)
@@ -162,9 +174,13 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use std::fs::remove_file;
+
+    use serde_json::Map;
+
+    use super::*;
+    use crate::Row;
+    use crate::map;
 
     fn add<S: Into<String>>(x: S, y: S) -> String {
         "{\"+\":[".to_string() + &x.into() + "," + &y.into() + "]}"
@@ -243,16 +259,16 @@ mod tests {
         let mut db = Database::open("./", "test").unwrap();
         let cmd = Cmd::Insert(
             "t".to_string(),
-            vec![JsonVal::from(1), JsonVal::from(2.1), JsonVal::from("s")],
+            vec![map! {"x" => 1}, map! {"x" => 2.1}, map! {"x" => "s"}],
         );
         db.eval_cmd(cmd).unwrap();
         assert_eq!(db.tables.len(), 1);
         let tbl = &db.tables[0];
         assert_eq!(tbl.name(), "t");
         assert_eq!(tbl.len(), 3);
-        assert_eq!(tbl.rows[0], JsonVal::from(1));
-        assert_eq!(tbl.rows[1], JsonVal::from(2.1));
-        assert_eq!(tbl.rows[2], JsonVal::from("s"));
+        assert_eq!(tbl.rows[0], map! {"x" => 1});
+        assert_eq!(tbl.rows[1], map! {"x" => 2.1});
+        assert_eq!(tbl.rows[2], map! {"x" => "s"});
 
         remove_file("./test.db").unwrap();
         remove_file("./t.table").unwrap();
@@ -264,9 +280,9 @@ mod tests {
         let mut db = Database::open("./", "test3").unwrap();
         db.eval_cmd(Cmd::Insert(
             "foo".to_string(),
-            vec![JsonVal::from(1), JsonVal::from(2.1), JsonVal::from("s")],
+            vec![map! {"x" => 1}, map! {"x" => 2.1}, map! {"x" => "s"}],
         ))
-        .unwrap();
+            .unwrap();
 
         assert_eq!(db.tables.len(), 1);
         // delete table
@@ -282,29 +298,49 @@ mod tests {
         // create table
         let cmd = Cmd::Insert(
             "append".to_string(),
-            vec![JsonVal::from(1), JsonVal::from(2.1), JsonVal::from("s")],
+            vec![map! {"x" => 1}, map! {"x" => 2.1}, map! {"x" => "s"}],
         );
         db.eval_cmd(cmd).unwrap();
         // append data to table
         let cmd = Cmd::Insert(
             "append".to_string(),
-            vec![JsonVal::from(2), JsonVal::from(3.1), JsonVal::from("t")],
+            vec![map! {"x" => 2}, map! {"x"=>3.1}, map! {"x"=>"t"}],
         );
         db.eval_cmd(cmd).unwrap();
         assert_eq!(db.tables.len(), 1);
         let tbl = &db.tables[0];
         assert_eq!(tbl.name(), "append");
         assert_eq!(tbl.len(), 6);
-        assert_eq!(tbl.rows[0], JsonVal::from(1));
-        assert_eq!(tbl.rows[1], JsonVal::from(2.1));
-        assert_eq!(tbl.rows[2], JsonVal::from("s"));
-        assert_eq!(tbl.rows[3], JsonVal::from(2));
-        assert_eq!(tbl.rows[4], JsonVal::from(3.1));
-        assert_eq!(tbl.rows[5], JsonVal::from("t"));
+        assert_eq!(tbl.rows[0], map! {"x" => 1});
+        assert_eq!(tbl.rows[1], map! {"x" => 2.1});
+        assert_eq!(tbl.rows[2], map! {"x" => "s"});
+        assert_eq!(tbl.rows[3], map! {"x" => 2});
+        assert_eq!(tbl.rows[4], map! {"x" => 3.1});
+        assert_eq!(tbl.rows[5], map! {"x" => "t"});
 
         remove_file("./append.db").unwrap();
         remove_file("./append.table").unwrap();
     }
+
+    #[test]
+    fn select_sum_ok() {
+        let mut db = Database::open("./", "t4").unwrap();
+        // create table
+        let cmd = Cmd::Insert(
+            "prices".to_string(),
+            vec![map! {"price" => 1}, map! {"price" => 2}, map! {"price" => 3}],
+        );
+        db.eval_cmd(cmd).unwrap();
+        let sum_expr = Expr::Sum(Box::new(Expr::Get("price".to_string())));
+        let qry = Query::from(vec![sum_expr], "prices".to_string());
+        let res = qry.exec(&db).unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0], map! {"sum(price)" => 6.0});
+
+        remove_file("./t4.db").unwrap();
+        remove_file("./prices.table").unwrap();
+    }
+
 
     /*
     #[test]

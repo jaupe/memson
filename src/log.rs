@@ -3,10 +3,10 @@ use std::io::{self, BufRead, BufReader, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonVal;
+use serde_json::{Map, Value as JsonVal};
 
 use crate::db::Table;
-use crate::Res;
+use crate::{Res, Row};
 
 fn open_file<P: AsRef<Path>>(path: P) -> io::Result<File> {
     OpenOptions::new()
@@ -105,7 +105,7 @@ pub struct ReplayLog {
 }
 
 impl ReplayLog {
-    pub fn new<P: AsRef<Path>>(path: P, rows: &[JsonVal]) -> io::Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P, rows: &[Map<String, JsonVal>]) -> io::Result<Self> {
         let mut log = Self::open(path)?;
         for row in rows {
             log.write(row)?;
@@ -118,7 +118,7 @@ impl ReplayLog {
         Ok(Self { file })
     }
 
-    pub fn insert(&mut self, vals: &[JsonVal]) -> io::Result<()> {
+    pub fn insert(&mut self, vals: &[Map<String, JsonVal>]) -> io::Result<()> {
         //TODO can this be done more efficiently to remove intermiedia?
         for val in vals {
             self.write(val)?;
@@ -126,12 +126,12 @@ impl ReplayLog {
         Ok(())
     }
 
-    fn write(&mut self, val: &JsonVal) -> io::Result<()> {
-        let row = val.to_string() + "\n";
+    fn write(&mut self, val: &Map<String, JsonVal>) -> io::Result<()> {
+        let row = serde_json::to_string(val).unwrap() + "\n";
         self.file.write_all(row.as_bytes())
     }
 
-    pub fn replay(&mut self) -> Res<Vec<JsonVal>> {
+    pub fn replay(&mut self) -> Res<Vec<Row>> {
         let buf = Box::new(BufReader::new(&mut self.file));
         let mut rows = Vec::new();
         //TODO parallelize this
@@ -140,11 +140,11 @@ impl ReplayLog {
                 eprintln!("{:?}", err);
                 "bad line"
             })?;
-            let val: JsonVal = serde_json::from_str(&line).map_err(|err| {
+            let row: Row = serde_json::from_str(&line).map_err(|err| {
                 println!("{:?}", err);
                 "bad json"
             })?;
-            rows.push(val);
+            rows.push(row);
         }
         Ok(rows)
     }
@@ -179,19 +179,19 @@ mod tests {
     #[test]
     fn replaylog_load() {
         let mut log = ReplayLog::open("./c.table").unwrap();
-        log.insert(&vec![JsonVal::from(1), JsonVal::from("a")])
+        log.insert(&vec![map!{"x"=> 1}, map!{"x"=>"a"}])
             .unwrap();
-        log.insert(&vec![JsonVal::from(2), JsonVal::from("b")])
+        log.insert(&vec![map!{"x"=>2}, map!{"x"=>"b"}].as_ref())
             .unwrap();
         log.file.seek(SeekFrom::Start(0)).unwrap();
 
         assert_eq!(
             log.replay().unwrap(),
             vec![
-                JsonVal::from(1),
-                JsonVal::from("a"),
-                JsonVal::from(2),
-                JsonVal::from("b")
+                map!{"x"=>1},
+                map!{"x"=>"a"},
+                map!{"x"=>2},
+                map!{"x"=>"b"},
             ]
         );
 

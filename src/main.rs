@@ -1,27 +1,45 @@
+#![feature(box_patterns)]
 //! Memson is an in-memory JSON key/value cache.
 //!
 //! JSON structures are stored by a string key.
 //!
 #![warn(rust_2018_idioms)]
 
+
+use std::error::Error;
+use std::sync::{Arc, Mutex};
+
 use clap::{App, Arg};
+use futures::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value as JsonVal, Map};
 use tokio::net::TcpListener;
 use tokio_util::codec::{Framed, LinesCodec};
 
-use db::*;
-use futures::{SinkExt, StreamExt};
+#[macro_export]
+macro_rules! map (
+    { $($key:expr => $value:expr),+ } => {
+        {
+            let mut m = Map::new();
+            $(
+                m.insert($key.to_string(), JsonVal::from($value));
+            )+
+            m
+        }
+     };
+);
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonVal;
-use std::error::Error;
-use std::sync::{Arc, Mutex};
+use db::*;
 
 mod db;
 mod json;
 mod log;
 mod query;
 
+type Row = Map<String, JsonVal>;
 type Res<T> = Result<T, &'static str>;
+
+
 
 /// Possible requests our clients can send us
 #[derive(Debug, Deserialize, Serialize)]
