@@ -179,19 +179,19 @@ mod tests {
     #[test]
     fn replaylog_load() {
         let mut log = ReplayLog::open("./c.table").unwrap();
-        log.insert(&vec![map!{"x"=> 1}, map!{"x"=>"a"}])
+        log.insert(&vec![obj!{"x"=> 1}, obj!{"x"=>"a"}])
             .unwrap();
-        log.insert(&vec![map!{"x"=>2}, map!{"x"=>"b"}].as_ref())
+        log.insert(&vec![obj!{"x"=>2}, obj!{"x"=>"b"}].as_ref())
             .unwrap();
         log.file.seek(SeekFrom::Start(0)).unwrap();
 
         assert_eq!(
             log.replay().unwrap(),
             vec![
-                map!{"x"=>1},
-                map!{"x"=>"a"},
-                map!{"x"=>2},
-                map!{"x"=>"b"},
+                obj!{"x"=>1},
+                obj!{"x"=>"a"},
+                obj!{"x"=>2},
+                obj!{"x"=>"b"},
             ]
         );
 

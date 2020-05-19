@@ -17,7 +17,7 @@ use tokio::net::TcpListener;
 use tokio_util::codec::{Framed, LinesCodec};
 
 #[macro_export]
-macro_rules! map (
+macro_rules! obj (
     { $($key:expr => $value:expr),+ } => {
         {
             let mut m = Map::new();
